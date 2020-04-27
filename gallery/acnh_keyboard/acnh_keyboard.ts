@@ -4,7 +4,7 @@ import axios from 'axios'
 import { Client } from 'cchook'
 import { BotUtils } from 'telegram-bot-utils/dist/bot'
 
-const appInfo = {
+const OPT = {
     name: 'acnh',
     description: 'Utils for Animal Crossing: New Horizons',
     commands: {
@@ -32,18 +32,24 @@ const appInfo = {
         },
     },
     maxMsgLen: 10,
-}
-
-const hookAction = 'acnh_token'
-const scriptPath = './acnh_token_getter.js'
-const infoStr = {
-    dataMissing: `User info not found, using MITM tool to get your token, or using command /${appInfo.commands.help.str} to get help.`,
-    tokenExpire: `Token expired, using MITM tool to renew your token, or using command /${appInfo.commands.help.str} to get help.`,
-    gamingOffline: `You can only send messages when your AC:NH is online.`,
-    userMention: `This script only for user: `,
-    keyboardStart: `Keyboard listener for AC:NH has been started.`,
-    keyboardStop: `Keyboard listener for AC:NH has been stopped.`,
-    version: 'version: ',
+    hookCliOptions: {
+        user: 'USERID',
+        address: 'https://cchook.youraddress',
+        port: 8030,
+        password: 'password',
+        action: 'acnh_token',
+    },
+    scriptPath: './acnh_token_getter.js',
+    text: {
+        dataMissing: `User info not found, using MITM tool to get your token, or using help command to get help.`,
+        tokenUpdate: `Token has been updated.`,
+        tokenExpire: `Token expired, using MITM tool to renew your token, or using help command to get help.`,
+        gamingOffline: `You can only send messages when your AC:NH is online.`,
+        userMention: `This script only for user: `,
+        keyboardStart: `Keyboard listener for AC:NH has been started.`,
+        keyboardStop: `Keyboard listener for AC:NH has been stopped.`,
+        version: 'version: ',
+    },
 }
 
 type appData = {
@@ -56,15 +62,8 @@ type appData = {
     }
 }
 
-const cchookCli = new Client({
-    user: 'USERID',
-    address: 'https://cchook.youraddress',
-    port: 8030,
-    password: 'password',
-})
-
 const checkData = (bot: BotUtils, userId: number, chatId?: number): boolean => {
-    const app = bot.application.get(appInfo.name)
+    const app = bot.application.get(OPT.name)
     const userData = app.dataMan({
         user_id: userId,
     })
@@ -74,7 +73,7 @@ const checkData = (bot: BotUtils, userId: number, chatId?: number): boolean => {
         typeof _data.headers.cookie == 'undefined' ||
         typeof _data.headers.authorization == 'undefined'
     ) {
-        bot.api.sendMessage(chatId || userId, infoStr['dataMissing'])
+        bot.api.sendMessage(chatId || userId, OPT.text['dataMissing'])
         userData.clean()
         return false
     }
@@ -82,10 +81,11 @@ const checkData = (bot: BotUtils, userId: number, chatId?: number): boolean => {
         userData.clean()
         bot.api.sendMessage(
             chatId || _data.initChat || userId,
-            infoStr['tokenExpire']
+            OPT.text['tokenExpire']
         )
         return false
     }
+    return true
 }
 
 const sendMessage = async (
@@ -95,7 +95,7 @@ const sendMessage = async (
     chatId?: number
 ): Promise<boolean> => {
     if (!checkData(bot, userId, chatId)) return false
-    const app = bot.application.get(appInfo.name)
+    const app = bot.application.get(OPT.name)
     const userData = app.dataMan({
         user_id: userId,
     })
@@ -106,6 +106,7 @@ const sendMessage = async (
             : Array.isArray(_data.headers.cookie)
             ? _data.headers.cookie.join(';')
             : undefined
+    const _text = [text.substr(0, OPT.maxMsgLen), text.substr(OPT.maxMsgLen)]
     return new Promise((resolve) => {
         axios({
             baseURL:
@@ -113,7 +114,7 @@ const sendMessage = async (
             method: 'POST',
             data: {
                 type: 'keyboard',
-                body: text[0],
+                body: _text[0],
             },
             headers: {
                 Accept: 'application/json',
@@ -128,9 +129,14 @@ const sendMessage = async (
                 _data.headers.cookie =
                     res.headers['set-cookie'] || res.headers['Set-Cookie']
                 userData.set(_data)
-                if (text[1] !== '') {
-                    await wait(1000)
-                    const _res = await sendMessage(bot, text[1], userId, chatId)
+                if (_text[1] !== '') {
+                    await wait(1500)
+                    const _res = await sendMessage(
+                        bot,
+                        _text[1],
+                        userId,
+                        chatId
+                    )
                     resolve(_res)
                 }
                 resolve(true)
@@ -139,7 +145,7 @@ const sendMessage = async (
                 if (err['response']['data']['code'] == 1001) {
                     bot.api.sendMessage(
                         chatId || userId,
-                        infoStr['gamingOffline']
+                        OPT.text['gamingOffline']
                     )
                     resolve(true)
                 }
@@ -156,10 +162,17 @@ const wait = async (timeout: number): Promise<void> => {
     })
 }
 
-const ACNH = (bot: BotUtils) => {
+const ACNH = (bot: BotUtils, options: Optional<typeof OPT>) => {
+    assign(OPT, options)
     bot.event.on('ready', () => {
-        cchookCli.start()
-        cchookCli.action.on(hookAction, (data) => {
+        const cli = new Client({
+            user: OPT.hookCliOptions.user,
+            address: OPT.hookCliOptions.address,
+            port: OPT.hookCliOptions.port,
+            password: OPT.hookCliOptions.password,
+        })
+        cli.start()
+        cli.action.on(OPT.hookCliOptions.action, (data) => {
             const _data = { ...data } as {
                 request: {
                     body: {
@@ -190,7 +203,11 @@ const ACNH = (bot: BotUtils) => {
                     const userData = bot.application.get('acnh').dataMan({
                         user_id: userId,
                     })
-                    userData.set(_info, ['tokenInfo'])
+                    userData.set(_info)
+                    bot.api.sendMessage(
+                        _info.initChat || userId,
+                        OPT.text.tokenUpdate
+                    )
                 } catch (err) {
                     //
                 }
@@ -198,31 +215,31 @@ const ACNH = (bot: BotUtils) => {
         })
     })
 
-    bot.application.add(appInfo.name, {
+    bot.application.add(OPT.name, {
         is_group_need_bind: true,
         data_bind_with_chat: false,
         data_bind_with_user: true,
     })
 
     bot.command.add(
-        appInfo.commands.help.str,
+        OPT.commands.help.str,
         (info) => {},
-        { filter: 'public', description: appInfo.commands.help.description },
-        { application_name: appInfo.name }
+        { filter: 'public', description: OPT.commands.help.description },
+        { application_name: OPT.name }
     )
 
     bot.command.add(
-        appInfo.commands.init.str,
+        OPT.commands.init.str,
         (info) => {
             const msg = info.message
-            const script = fs.readFileSync(scriptPath).toString()
+            const script = fs.readFileSync(OPT.scriptPath).toString()
             const version =
                 new RegExp(/const\sversion\s=\s'([\w|\.]{1,})'/, 'gm').exec(
                     script
                 )[1] || 'unknown'
             const caption = [] as string[]
-            caption.push(infoStr.version + version)
-            caption.push(infoStr.userMention + msg.from.first_name)
+            caption.push(OPT.text.version + version)
+            caption.push(OPT.text.userMention + msg.from.first_name)
             bot.api.sendDocument(
                 msg.from.id,
                 Buffer.from(
@@ -237,42 +254,42 @@ const ACNH = (bot: BotUtils) => {
                 { filename: 'acnh_token_getter.js' }
             )
         },
-        { filter: 'public', description: appInfo.commands.init.description },
-        { application_name: appInfo.name }
+        { filter: 'public', description: OPT.commands.init.description },
+        { application_name: OPT.name }
     )
 
     bot.command.add(
-        appInfo.commands.keyboard.str,
+        OPT.commands.keyboard.str,
         (info) => {
             const msg = info.message
             if (!checkData(bot, msg.from.id)) return
             bot.messageAction.new(
-                appInfo.actions.keyboarListener.str,
+                OPT.actions.keyboarListener.str,
                 msg.chat.id,
                 msg.from.id
             )
         },
         {
             filter: 'public',
-            description: appInfo.commands.keyboard.description,
+            description: OPT.commands.keyboard.description,
         },
-        { application_name: appInfo.name }
+        { application_name: OPT.name }
     )
 
     bot.command.add(
-        appInfo.commands.stop.str,
+        OPT.commands.stop.str,
         (info) => {
             const userData = info.data.user_data
             const _data = userData.get() as appData
             bot.messageAction.record.delete(_data.listenerId)
-            bot.api.sendMessage(info.data.user_id, infoStr.keyboardStop)
+            bot.api.sendMessage(info.data.user_id, OPT.text.keyboardStop)
         },
-        { filter: 'public', description: appInfo.commands.stop.description },
-        { application_name: appInfo.name }
+        { filter: 'public', description: OPT.commands.stop.description },
+        { application_name: OPT.name }
     )
 
     bot.messageAction.add(
-        appInfo.actions.keyboarListener.str,
+        OPT.actions.keyboarListener.str,
         async (info) => {
             if (!checkData(bot, info.data.user_id)) return true
             const msg = info.message
@@ -287,19 +304,59 @@ const ACNH = (bot: BotUtils) => {
         },
         {
             init_function: async (info) => {
-                bot.api.sendMessage(info.data.chat_id, infoStr.keyboardStart)
+                bot.api.sendMessage(info.data.chat_id, OPT.text.keyboardStart)
             },
             duplicate_function: async (info) => {
                 //
             },
             expire_function: async (info) => {
-                bot.api.sendMessage(info.data.chat_id, infoStr.keyboardStop)
+                bot.api.sendMessage(info.data.chat_id, OPT.text.keyboardStop)
             },
         },
         {
-            application_name: appInfo.name,
+            application_name: OPT.name,
         }
     )
 }
 
-export { ACNH }
+export { ACNH as run, OPT as options }
+
+type Optional<T extends object> = {
+    [key in keyof T]?: T[key] extends object ? Optional<T[key]> : T[key]
+}
+const assign = <T extends object>(
+    target: Required<T>,
+    input: Optional<T>
+): void => {
+    for (const key of Object.keys(target)) {
+        const _val = input[key]
+        if (typeof _val != 'undefined') {
+            if (_val == null) {
+                target[key] = null
+                continue
+            }
+            if (Array.isArray(_val)) {
+                for (const i in target[key]) {
+                    const __val = _val[i]
+                    if (typeof __val == 'undefined') continue
+                    if (
+                        typeof target[key][i] == 'object' &&
+                        !Array.isArray(target) &&
+                        target != null
+                    ) {
+                        assign(target[key][i], _val[i])
+                    } else {
+                        target[key][i] = __val
+                    }
+                }
+                continue
+            }
+            if (typeof _val == 'object' && _val != {}) {
+                assign(target[key], _val)
+                continue
+            }
+            target[key] = _val
+            continue
+        }
+    }
+}
