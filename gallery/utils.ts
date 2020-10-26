@@ -10,6 +10,8 @@ type Cookie = {
     SameSite?: 'Strict' | 'Lax' | 'None'
 }
 
+export type Session = Cookie[]
+
 export const cookieParse = (cookie: string): Cookie => {
     const res = {} as Cookie
     const _cookie = cookie
