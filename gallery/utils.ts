@@ -67,4 +67,18 @@ const safeTag = (input: string, nonMD?: boolean): string => {
     return nonMD ? output : safeMDv2(output)
 }
 
-export { safeMDv2, safeTag }
+const genRandomChar = (radix: number): string => {
+    return Math.floor(Math.random() * radix)
+        .toString(radix)
+        .toLocaleUpperCase()
+}
+
+const genRandomHex = (len: number): string => {
+    const id = []
+    for (const _ of ' '.repeat(len)) {
+        id.push(genRandomChar(16))
+    }
+    return id.join('')
+}
+
+export { safeMDv2, safeTag, genRandomHex }
