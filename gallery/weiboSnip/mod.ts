@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'fs'
 
 import { BotUtils } from 'telegram-bot-utils/dist/bot'
-import { safeMDv2, safeTag, genRandomHex, jpegoptim } from '../utils'
+import { safeMDv2, safeTag, genRandomHex, jpegoptim, wait } from '../utils'
 
 import fetch from 'node-fetch'
 import { parse } from 'node-html-parser'
@@ -13,6 +13,7 @@ const OPT = {
         tag: '微博',
     },
     config: {
+        tester: undefined,
         timeout: 2500,
     },
 }
@@ -50,87 +51,92 @@ const fetchRemote = async (url: string) => {
     return fetch(url)
 }
 
+const msgDel = (bot: BotUtils, _chatId: string | number, _msgId: string) => {
+    try {
+        bot.api.deleteMessage(OPT.config.tester || _chatId, _msgId)
+    } catch {
+        bot.api.sendMessage(
+            OPT.config.tester || _chatId,
+            'unable to delete msg!'
+        )
+    }
+}
+
 const tempSendMedia = async (
     chat_id: string | number,
-    // message_id: string | number,
     url: string,
     mediaType: 'photo' | 'video',
-    list: string[],
+    OID: string,
+    list: { [id: string]: string },
     total: number,
-    bot: BotUtils
+    bot: BotUtils,
+    notiMsgId?: string
 ) => {
-    const _TEMPID = genRandomHex(4)
     const _inf = {
         isFailed: false,
         done: false,
         now: Date.now(),
     }
-    console.log(`[LOG] {${_TEMPID}} checking: ${url}`)
-    const _tempDel = (_chatId: string | number, _msgId: string) => {
-        try {
-            bot.api.deleteMessage(_chatId, _msgId)
-        } catch {
-            bot.api.sendMessage(_chatId, 'unable to delete msg!')
-        }
-    }
-    // const _send = mediaType == 'photo' ? bot.api.sendPhoto : bot.api.sendVideo
     try {
         try {
-            // const res = await _send(chat_id, url)
             const res = await bot.api.sendPhoto(
-                chat_id,
-                url.replace(/\.jpg$/, '')
+                OPT.config.tester || chat_id,
+                url.replace(/\.jpg$/, ''),
+                { disable_notification: true }
             )
-            list.push(
+            list[OID] =
                 mediaType == 'photo'
                     ? res.photo.pop().file_id
                     : res.video.file_id
-            )
-            _tempDel(chat_id, res.message_id.toString())
+
+            msgDel(bot, chat_id, res.message_id.toString())
             _inf.done = true
         } catch {
             _inf.isFailed = true
             const resp = await fetchRemote(url)
-            console.log('downloaded...')
             const buf = await jpegoptim(await resp.buffer(), 4500)
-            console.log('compressed...')
-            const res = await bot.api.sendPhoto(chat_id, buf)
-            list.push(
+            const res = await bot.api.sendPhoto(
+                OPT.config.tester || chat_id,
+                buf,
+                {
+                    disable_notification: true,
+                }
+            )
+            list[OID] =
                 mediaType == 'photo'
                     ? res.photo.pop().file_id
                     : res.video.file_id
-            )
-            _tempDel(chat_id, res.message_id.toString())
+
+            msgDel(bot, chat_id, res.message_id.toString())
             _inf.done = true
-            console.log(
-                `[LOG] {${_TEMPID}} done${
-                    _inf.isFailed ? ', which once failed' : ''
-                }`
-            )
         }
     } catch (e) {
-        list.push('_')
+        list[OID] = '_'
         _inf.done = true
-        console.log(`[LOG] {${_TEMPID}} done, which was very failed`)
+        console.log(`[ERR] {${OID}} done, which was very failed`)
     }
-    if (list.length == total) {
-        console.log(`[LOG] {${_TEMPID}} finally`)
-        sendMedia(chat_id, mediaType, list, bot)
+    if (
+        Object.values(list).filter((val) => typeof val == 'string').length ==
+        total
+    ) {
+        console.log(`[LOG] {${OID}} finally`)
+        sendMedia(chat_id, mediaType, list, bot, notiMsgId)
     }
 }
 
 const sendMedia = async (
     chat_id: string | number,
     mediaType: 'photo' | 'video',
-    list: string[],
-    bot: BotUtils
+    list: { [id: string]: string },
+    bot: BotUtils,
+    notiMsgId?: string
 ) => {
-    list = list.filter((id) => {
-        return id != '_'
-    })
+    if (notiMsgId) msgDel(bot, chat_id, notiMsgId)
+    const pending = Object.values(list).filter((val) => val != '_')
     while (true) {
-        if (list.length > 1) {
-            const group = list.splice(0, 10)
+        await wait(500)
+        if (pending.length > 1) {
+            const group = pending.splice(0, 10)
             bot.api.sendMediaGroup(
                 chat_id,
                 group.map((id) => {
@@ -140,18 +146,16 @@ const sendMedia = async (
                     }
                 })
             )
-        } else if (list.length == 1) {
-            // const _send =
-            //     mediaType == 'photo' ? bot.api.sendPhoto : bot.api.sendVideo
-            // _send(chat_id, list.pop())
-            bot.api.sendPhoto(chat_id, list.pop())
+        } else if (pending.length == 1) {
+            bot.api.sendPhoto(chat_id, pending.pop())
         } else {
             break
         }
     }
 }
 
-const WBSnip = (bot: BotUtils) => {
+const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
+    assign(OPT, options)
     bot.event.on('ready', () => {
         bot.application.add(OPT.name, {
             is_group_need_bind: false,
@@ -208,19 +212,30 @@ const WBSnip = (bot: BotUtils) => {
                 )
                 const pics = _data.status.pics.map((pic) => {
                     const _p = pic.large || pic
-                    return _p.url
+                    return {
+                        pid: pic.pid,
+                        url: _p.url,
+                    }
                 })
-                const list = []
+                // const list = [] as { id: string; fileId: string }[]
+                const list = {} as { [OID: string]: string }
                 // for (const _url of pics.slice(0, 1)) {
-                for (const _url of pics) {
-                    tempSendMedia(
-                        msg.chat.id,
-                        _url,
-                        'photo',
-                        list,
-                        pics.length,
-                        bot
-                    )
+                let _pending = 1
+                for (const pic of pics) {
+                    const OID = (_pending + 1).toString()
+                    _pending += 1
+                    list[OID] = undefined
+                    setTimeout(() => {
+                        tempSendMedia(
+                            msg.chat.id,
+                            pic.url,
+                            'photo',
+                            OID,
+                            list,
+                            pics.length,
+                            bot
+                        )
+                    }, 50)
                 }
             } catch (e) {
                 bot.api.sendMessage(
@@ -238,3 +253,43 @@ const WBSnip = (bot: BotUtils) => {
 }
 
 export { WBSnip as run }
+
+type Optional<T extends object> = {
+    [key in keyof T]?: T[key] extends object ? Optional<T[key]> : T[key]
+}
+const assign = <T extends object>(
+    target: Required<T>,
+    input: Optional<T>
+): void => {
+    for (const key of Object.keys(target)) {
+        const _val = input[key]
+        if (typeof _val != 'undefined') {
+            if (_val == null) {
+                target[key] = null
+                continue
+            }
+            if (Array.isArray(_val)) {
+                for (const i in target[key]) {
+                    const __val = _val[i]
+                    if (typeof __val == 'undefined') continue
+                    if (
+                        typeof target[key][i] == 'object' &&
+                        !Array.isArray(target) &&
+                        target != null
+                    ) {
+                        assign(target[key][i], _val[i])
+                    } else {
+                        target[key][i] = __val
+                    }
+                }
+                continue
+            }
+            if (typeof _val == 'object' && _val != {}) {
+                assign(target[key], _val)
+                continue
+            }
+            target[key] = _val
+            continue
+        }
+    }
+}
