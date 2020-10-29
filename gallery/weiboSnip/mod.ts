@@ -11,6 +11,7 @@ const OPT = {
     description: 'Weibo link snippet generation',
     text: {
         tag: '微博',
+        statusDone: '已经完成',
     },
     config: {
         tester: undefined,
@@ -51,14 +52,21 @@ const fetchRemote = async (url: string) => {
     return fetch(url)
 }
 
+const _LOCAL: { [pendingID: string]: number } = {}
+
+const queryInf = (total: number, done: number, sending?: number): string => {
+    return (
+        '*\\[ LOG \\]*' +
+        '\n' +
+        safeMDv2(OPT.text.statusDone + ` (${done}/${total})`)
+    )
+}
+
 const msgDel = (bot: BotUtils, _chatId: string | number, _msgId: string) => {
     try {
-        bot.api.deleteMessage(OPT.config.tester || _chatId, _msgId)
+        bot.api.deleteMessage(_chatId, _msgId)
     } catch {
-        bot.api.sendMessage(
-            OPT.config.tester || _chatId,
-            'unable to delete msg!'
-        )
+        bot.api.sendMessage(_chatId, 'unable to delete msg!')
     }
 }
 
@@ -70,7 +78,7 @@ const tempSendMedia = async (
     list: { [id: string]: string },
     total: number,
     bot: BotUtils,
-    notiMsgId?: string
+    notifMsgId?: string
 ) => {
     const _inf = {
         isFailed: false,
@@ -89,7 +97,7 @@ const tempSendMedia = async (
                     ? res.photo.pop().file_id
                     : res.video.file_id
 
-            msgDel(bot, chat_id, res.message_id.toString())
+            msgDel(bot, OPT.config.tester || chat_id, res.message_id.toString())
             _inf.done = true
         } catch {
             _inf.isFailed = true
@@ -107,7 +115,7 @@ const tempSendMedia = async (
                     ? res.photo.pop().file_id
                     : res.video.file_id
 
-            msgDel(bot, chat_id, res.message_id.toString())
+            msgDel(bot, OPT.config.tester || chat_id, res.message_id.toString())
             _inf.done = true
         }
     } catch (e) {
@@ -119,8 +127,23 @@ const tempSendMedia = async (
         Object.values(list).filter((val) => typeof val == 'string').length ==
         total
     ) {
-        console.log(`[LOG] {${OID}} finally`)
-        sendMedia(chat_id, mediaType, list, bot, notiMsgId)
+        sendMedia(chat_id, mediaType, list, bot, notifMsgId)
+    }
+    if (notifMsgId && Date.now() - _LOCAL[notifMsgId] > 400) {
+        _LOCAL[notifMsgId] = Date.now()
+        const edited = await bot.api.editMessageText(
+            queryInf(
+                Object.keys(list).length,
+                Object.values(list).filter(
+                    (url) => typeof url == 'string' && url != '_'
+                ).length
+            ),
+            {
+                chat_id: chat_id,
+                message_id: parseInt(notifMsgId),
+                parse_mode: 'MarkdownV2',
+            }
+        )
     }
 }
 
@@ -129,9 +152,13 @@ const sendMedia = async (
     mediaType: 'photo' | 'video',
     list: { [id: string]: string },
     bot: BotUtils,
-    notiMsgId?: string
+    notifMsgId?: string
 ) => {
-    if (notiMsgId) msgDel(bot, chat_id, notiMsgId)
+    if (notifMsgId) {
+        setTimeout(() => {
+            msgDel(bot, chat_id, notifMsgId)
+        }, 2000)
+    }
     const pending = Object.values(list).filter((val) => val != '_')
     while (true) {
         await wait(500)
@@ -197,7 +224,7 @@ const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
                 )[1]
                 let _data = {} as { status: WeiboStatus }
                 eval(script.replace('var $render_data', '_data'))
-                bot.api.sendMessage(
+                await bot.api.sendMessage(
                     msg.chat.id,
                     `*\\[ ${safeTag(OPT.text.tag)} \\]*\n${safeMDv2(
                         parse(_data.status.text).innerText
@@ -217,9 +244,17 @@ const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
                         url: _p.url,
                     }
                 })
-                // const list = [] as { id: string; fileId: string }[]
+                const _INF = await bot.api.sendMessage(
+                    msg.chat.id,
+                    queryInf(pics.length, 0, 0),
+                    {
+                        parse_mode: 'MarkdownV2',
+                        disable_notification: true,
+                    }
+                )
+                const notiID = _INF.message_id.toString()
+                _LOCAL[notiID] = 0
                 const list = {} as { [OID: string]: string }
-                // for (const _url of pics.slice(0, 1)) {
                 let _pending = 1
                 for (const pic of pics) {
                     const OID = (_pending + 1).toString()
@@ -233,7 +268,8 @@ const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
                             OID,
                             list,
                             pics.length,
-                            bot
+                            bot,
+                            notiID
                         )
                     }, 50)
                 }
