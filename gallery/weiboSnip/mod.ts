@@ -1,8 +1,10 @@
+import { readFileSync, writeFileSync } from 'fs'
+
 import { BotUtils } from 'telegram-bot-utils/dist/bot'
+import { safeMDv2, safeTag, genRandomHex, jpegoptim } from '../utils'
+
 import fetch from 'node-fetch'
 import { parse } from 'node-html-parser'
-import { safeMDv2, safeTag, genRandomHex } from '../utils'
-import { writeFileSync } from 'fs'
 
 const OPT = {
     name: 'weiboSnip',
@@ -44,9 +46,8 @@ type WeiboStatus = {
     }[]
 }
 
-const fetchRemote2Buf = async (url: string) => {
-    const res = await fetch(url)
-    return await res.buffer()
+const fetchRemote = async (url: string) => {
+    return fetch(url)
 }
 
 const tempSendMedia = async (
@@ -89,33 +90,25 @@ const tempSendMedia = async (
             _inf.done = true
         } catch {
             _inf.isFailed = true
-            if (false) {
-                // setTimeout(() => {
-                //     if (!_inf.done) throw new Error('TIMEOUT')
-                // }, OPT.config.timeout)
-                console.log('downloading...')
-                const buf = await fetchRemote2Buf(url)
-                // writeFileSync(genRandomHex(12) + '.jpg', buf, 'binary')
-                console.log('downloaded...')
-                // const res = await _send(chat_id, buf)
-                const res = await bot.api.sendPhoto(chat_id, buf)
-                list.push(
-                    mediaType == 'photo'
-                        ? res.photo.pop().file_id
-                        : res.video.file_id
-                )
-                _tempDel(chat_id, res.message_id.toString())
-                _inf.done = true
-            } else {
-                list.push('_')
-            }
+            const resp = await fetchRemote(url)
+            console.log('downloaded...')
+            const buf = await jpegoptim(await resp.buffer(), 4500)
+            console.log('compressed...')
+            const res = await bot.api.sendPhoto(chat_id, buf)
+            list.push(
+                mediaType == 'photo'
+                    ? res.photo.pop().file_id
+                    : res.video.file_id
+            )
+            _tempDel(chat_id, res.message_id.toString())
+            _inf.done = true
             console.log(
                 `[LOG] {${_TEMPID}} done${
                     _inf.isFailed ? ', which once failed' : ''
                 }`
             )
         }
-    } catch {
+    } catch (e) {
         list.push('_')
         _inf.done = true
         console.log(`[LOG] {${_TEMPID}} done, which was very failed`)
