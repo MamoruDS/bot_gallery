@@ -1,7 +1,7 @@
 import { BotUtils } from 'telegram-bot-utils/dist/bot'
 import fetch from 'node-fetch'
 import { parse } from 'node-html-parser'
-import { safeMDv2, safeTag } from '../utils'
+import { safeMDv2, safeTag, genRandomHex } from '../utils'
 import { writeFileSync } from 'fs'
 
 const OPT = {
@@ -9,6 +9,9 @@ const OPT = {
     description: 'Weibo link snippet generation',
     text: {
         tag: '微博',
+    },
+    config: {
+        timeout: 2500,
     },
 }
 
@@ -41,9 +44,118 @@ type WeiboStatus = {
     }[]
 }
 
-export const fetchRemote2Buf = async (url) => {
+const fetchRemote2Buf = async (url: string) => {
     const res = await fetch(url)
     return await res.buffer()
+}
+
+const tempSendMedia = async (
+    chat_id: string | number,
+    // message_id: string | number,
+    url: string,
+    mediaType: 'photo' | 'video',
+    list: string[],
+    total: number,
+    bot: BotUtils
+) => {
+    const _TEMPID = genRandomHex(4)
+    const _inf = {
+        isFailed: false,
+        done: false,
+        now: Date.now(),
+    }
+    console.log(`[LOG] {${_TEMPID}} checking: ${url}`)
+    const _tempDel = (_chatId: string | number, _msgId: string) => {
+        try {
+            bot.api.deleteMessage(_chatId, _msgId)
+        } catch {
+            bot.api.sendMessage(_chatId, 'unable to delete msg!')
+        }
+    }
+    // const _send = mediaType == 'photo' ? bot.api.sendPhoto : bot.api.sendVideo
+    try {
+        try {
+            // const res = await _send(chat_id, url)
+            const res = await bot.api.sendPhoto(
+                chat_id,
+                url.replace(/\.jpg$/, '')
+            )
+            list.push(
+                mediaType == 'photo'
+                    ? res.photo.pop().file_id
+                    : res.video.file_id
+            )
+            _tempDel(chat_id, res.message_id.toString())
+            _inf.done = true
+        } catch {
+            _inf.isFailed = true
+            if (false) {
+                // setTimeout(() => {
+                //     if (!_inf.done) throw new Error('TIMEOUT')
+                // }, OPT.config.timeout)
+                console.log('downloading...')
+                const buf = await fetchRemote2Buf(url)
+                // writeFileSync(genRandomHex(12) + '.jpg', buf, 'binary')
+                console.log('downloaded...')
+                // const res = await _send(chat_id, buf)
+                const res = await bot.api.sendPhoto(chat_id, buf)
+                list.push(
+                    mediaType == 'photo'
+                        ? res.photo.pop().file_id
+                        : res.video.file_id
+                )
+                _tempDel(chat_id, res.message_id.toString())
+                _inf.done = true
+            } else {
+                list.push('_')
+            }
+            console.log(
+                `[LOG] {${_TEMPID}} done${
+                    _inf.isFailed ? ', which once failed' : ''
+                }`
+            )
+        }
+    } catch {
+        list.push('_')
+        _inf.done = true
+        console.log(`[LOG] {${_TEMPID}} done, which was very failed`)
+    }
+    if (list.length == total) {
+        console.log(`[LOG] {${_TEMPID}} finally`)
+        sendMedia(chat_id, mediaType, list, bot)
+    }
+}
+
+const sendMedia = async (
+    chat_id: string | number,
+    mediaType: 'photo' | 'video',
+    list: string[],
+    bot: BotUtils
+) => {
+    list = list.filter((id) => {
+        return id != '_'
+    })
+    while (true) {
+        if (list.length > 1) {
+            const group = list.splice(0, 10)
+            bot.api.sendMediaGroup(
+                chat_id,
+                group.map((id) => {
+                    return {
+                        type: mediaType,
+                        media: id,
+                    }
+                })
+            )
+        } else if (list.length == 1) {
+            // const _send =
+            //     mediaType == 'photo' ? bot.api.sendPhoto : bot.api.sendVideo
+            // _send(chat_id, list.pop())
+            bot.api.sendPhoto(chat_id, list.pop())
+        } else {
+            break
+        }
+    }
 }
 
 const WBSnip = (bot: BotUtils) => {
@@ -54,7 +166,7 @@ const WBSnip = (bot: BotUtils) => {
         })
         bot.api.on('message', async (msg) => {
             const url = msg.text || ''
-            const match = url.match(/https:\/\/m.weibo.cn\/(\d+)\/(\d+)/)
+            const match = url.match(/http[s]?:\/\/m.weibo.cn\/(\d+)\/(\d+)/)
             if (match == null) return
             const resp = await fetch(`https://m.weibo.cn/status/${match[2]}`, {
                 method: 'GET',
@@ -101,39 +213,21 @@ const WBSnip = (bot: BotUtils) => {
                         reply_to_message_id: msg.message_id,
                     }
                 )
-                const photos = _data.status.pics.slice(0, 10).map((pic) => {
+                const pics = _data.status.pics.map((pic) => {
                     const _p = pic.large || pic
-                    return {
-                        type: 'photo',
-                        media: _p.url,
-                    }
+                    return _p.url
                 })
-                const _cached: Buffer[] = []
-                for (const _p of photos) {
-                    console.log(_p)
-                    _cached.push(await fetchRemote2Buf(_p.media))
-                }
-                const ids: string[] = []
-                for (const buf of _cached) {
-                    const res = await bot.api.sendPhoto(msg.chat.id, buf)
-                    ids.push(res.photo.pop().file_id)
-                    bot.api.deleteMessage(
+                const list = []
+                // for (const _url of pics.slice(0, 1)) {
+                for (const _url of pics) {
+                    tempSendMedia(
                         msg.chat.id,
-                        res.message_id.toString()
+                        _url,
+                        'photo',
+                        list,
+                        pics.length,
+                        bot
                     )
-                }
-                if (ids.length > 1) {
-                    bot.api.sendMediaGroup(
-                        msg.chat.id,
-                        ids.slice(0, 10).map((_id) => {
-                            return {
-                                type: 'photo',
-                                media: _id,
-                            }
-                        })
-                    )
-                } else {
-                    bot.api.sendPhoto(msg.chat.id, ids[0])
                 }
             } catch (e) {
                 bot.api.sendMessage(
