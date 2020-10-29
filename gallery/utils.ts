@@ -84,6 +84,14 @@ const genRandomHex = (len: number): string => {
     return id.join('')
 }
 
+const wait = async (timeout: number): Promise<void> => {
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            resolve()
+        }, timeout)
+    })
+}
+
 const jpegoptim = async (
     input: Buffer,
     maxSize: number = 4500,
@@ -101,7 +109,6 @@ const jpegoptim = async (
             fs.unlinkSync(name)
         }
         if (output.length <= maxSize * 1000) break
-        console.log('shrink +1')
         fix -= step
     }
     return output
@@ -109,4 +116,4 @@ const jpegoptim = async (
 
 export { jpegoptim }
 
-export { safeMDv2, safeTag, genRandomHex }
+export { safeMDv2, safeTag, genRandomHex, wait }
