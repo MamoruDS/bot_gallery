@@ -1,3 +1,6 @@
+import * as fs from 'fs'
+import { exec, execSync } from 'child_process'
+
 type Cookie = {
     name: string
     value: string
@@ -80,5 +83,30 @@ const genRandomHex = (len: number): string => {
     }
     return id.join('')
 }
+
+const jpegoptim = async (
+    input: Buffer,
+    maxSize: number = 4500,
+    step: number = 150
+): Promise<Buffer> => {
+    const name = genRandomHex(12)
+    let output: Buffer
+    let fix: number = 0
+    while (true) {
+        try {
+            fs.writeFileSync(name, input)
+            execSync(`jpegoptim ${name} --size=${Math.round(maxSize + fix)}K`)
+            output = fs.readFileSync(name)
+        } finally {
+            fs.unlinkSync(name)
+        }
+        if (output.length <= maxSize * 1000) break
+        console.log('shrink +1')
+        fix -= step
+    }
+    return output
+}
+
+export { jpegoptim }
 
 export { safeMDv2, safeTag, genRandomHex }
