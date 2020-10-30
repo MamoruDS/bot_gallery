@@ -11,6 +11,7 @@ const OPT = {
     description: 'Weibo link snippet generation',
     text: {
         tag: '微博',
+        link: '📄 链接',
         statusDone: '已经完成',
         statusFailed: '失败',
     },
@@ -28,7 +29,22 @@ type WeiboStatus = {
         id: number
         screen_name: string
     }
-    pics: {
+    page_info?: {
+        type: 'article'
+        object_type: 5 | number
+        icon: string
+        page_pic: { height: number; url: string; width: number }
+        page_url: string
+        page_title: string
+        url_ori: string
+        content1: string
+        content2: string
+        author: {
+            profile_image_url: string
+            screen_name: string
+        }
+    }
+    pics?: {
         pid: string
         url: string
         size: 'orj360'
@@ -250,41 +266,78 @@ const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
                         reply_to_message_id: msg.message_id,
                     }
                 )
-                const pics = _data.status.pics.map((pic) => {
-                    const _p = pic.large || pic
-                    return {
-                        pid: pic.pid,
-                        url: _p.url,
-                    }
-                })
-                const _INF = await bot.api.sendMessage(
-                    msg.chat.id,
-                    queryInf(pics.length, 0, 0),
+                if (_data.status.page_info) {
+                    const page = _data.status.page_info
+                    let url: string
                     {
-                        parse_mode: 'MarkdownV2',
-                        disable_notification: true,
-                    }
-                )
-                const notiID = _INF.message_id.toString()
-                _LOCAL[notiID] = 0
-                const list = {} as { [OID: string]: string }
-                let _pending = 1
-                for (const pic of pics) {
-                    const OID = (_pending + 1).toString()
-                    _pending += 1
-                    list[OID] = undefined
-                    setTimeout(() => {
-                        tempSendMedia(
-                            msg.chat.id,
-                            pic.url,
-                            'photo',
-                            OID,
-                            list,
-                            pics.length,
-                            bot,
-                            notiID
+                        const match = page.page_url.match(
+                            /weibo\.com\/ttarticle\/p\/show\?id=([^&]+)/
                         )
-                    }, 50)
+                        url =
+                            match == null
+                                ? undefined
+                                : match[1]
+                                ? `https://card.weibo.com/article/m/show/id/${match[1]}`
+                                : undefined
+                    }
+                    url = url || page.page_url
+                    const preview = page.page_pic.url
+                    const text = `*${safeMDv2(page.content1)}*${
+                        page.content2 ? '\n' + safeMDv2(page.content2) : ''
+                    }\n[${safeMDv2(OPT.text.link)}](${url})`
+                    if (preview) {
+                        bot.api.sendPhoto(msg.chat.id, preview, {
+                            caption: text,
+                            parse_mode: 'MarkdownV2',
+                            disable_notification: false,
+                        })
+                    } else {
+                        bot.api.sendMessage(msg.chat.id, text, {
+                            parse_mode: 'MarkdownV2',
+                            disable_notification: false,
+                        })
+                    }
+                }
+                if (
+                    Array.isArray(_data.status.pics) &&
+                    _data.status.pics.length
+                ) {
+                    const pics = _data.status.pics.map((pic) => {
+                        const _p = pic.large || pic
+                        return {
+                            pid: pic.pid,
+                            url: _p.url,
+                        }
+                    })
+                    const _INF = await bot.api.sendMessage(
+                        msg.chat.id,
+                        queryInf(pics.length, 0, 0),
+                        {
+                            parse_mode: 'MarkdownV2',
+                            disable_notification: true,
+                        }
+                    )
+                    const notiID = _INF.message_id.toString()
+                    _LOCAL[notiID] = 0
+                    const list = {} as { [OID: string]: string }
+                    let _pending = 1
+                    for (const pic of pics) {
+                        const OID = (_pending + 1).toString()
+                        _pending += 1
+                        list[OID] = undefined
+                        setTimeout(() => {
+                            tempSendMedia(
+                                msg.chat.id,
+                                pic.url,
+                                'photo',
+                                OID,
+                                list,
+                                pics.length,
+                                bot,
+                                notiID
+                            )
+                        }, 50)
+                    }
                 }
             } catch (e) {
                 bot.api.sendMessage(
