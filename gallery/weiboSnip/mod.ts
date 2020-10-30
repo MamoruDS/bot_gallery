@@ -12,6 +12,7 @@ const OPT = {
     text: {
         tag: '微博',
         statusDone: '已经完成',
+        statusFailed: '失败',
     },
     config: {
         tester: undefined,
@@ -54,11 +55,15 @@ const fetchRemote = async (url: string) => {
 
 const _LOCAL: { [pendingID: string]: number } = {}
 
-const queryInf = (total: number, done: number, sending?: number): string => {
+const queryInf = (total: number, done: number, failed: number = 0): string => {
     return (
         '*\\[ LOG \\]*' +
-        '\n' +
-        safeMDv2(OPT.text.statusDone + ` (${done}/${total})`)
+        `\n ${safeMDv2(OPT.text.statusDone + ` (${done}/${total})`)}` +
+        `${
+            failed > 0
+                ? `\n ${safeMDv2(OPT.text.statusFailed + ' ' + failed)}`
+                : ''
+        }`
     )
 }
 
@@ -100,7 +105,6 @@ const tempSendMedia = async (
             msgDel(bot, OPT.config.tester || chat_id, res.message_id.toString())
             _inf.done = true
         } catch {
-            _inf.isFailed = true
             const resp = await fetchRemote(url)
             const buf = await jpegoptim(await resp.buffer(), 4500)
             const res = await bot.api.sendPhoto(
@@ -119,24 +123,27 @@ const tempSendMedia = async (
             _inf.done = true
         }
     } catch (e) {
+        _inf.isFailed = true
         list[OID] = '_'
         _inf.done = true
-        console.log(`[ERR] {${OID}} done, which was very failed`)
-    }
-    if (
-        Object.values(list).filter((val) => typeof val == 'string').length ==
-        total
-    ) {
-        sendMedia(chat_id, mediaType, list, bot, notifMsgId)
+        bot.api.sendMessage(
+            chat_id,
+            `*\\[ ERR \\]* weiboSnip: skipped, which was very failed\n${safeMDv2(
+                url
+            )}\n\`${safeMDv2(e.toString())}\``,
+            {
+                parse_mode: 'MarkdownV2',
+            }
+        )
     }
     if (notifMsgId && Date.now() - _LOCAL[notifMsgId] > 400) {
         _LOCAL[notifMsgId] = Date.now()
         const edited = await bot.api.editMessageText(
             queryInf(
                 Object.keys(list).length,
-                Object.values(list).filter(
-                    (url) => typeof url == 'string' && url != '_'
-                ).length
+                Object.values(list).filter((url) => typeof url == 'string')
+                    .length,
+                Object.values(list).filter((url) => url == '_').length
             ),
             {
                 chat_id: chat_id,
@@ -144,6 +151,12 @@ const tempSendMedia = async (
                 parse_mode: 'MarkdownV2',
             }
         )
+    }
+    if (
+        Object.values(list).filter((val) => typeof val == 'string').length ==
+        total
+    ) {
+        sendMedia(chat_id, mediaType, list, bot, notifMsgId)
     }
 }
 
@@ -157,7 +170,7 @@ const sendMedia = async (
     if (notifMsgId) {
         setTimeout(() => {
             msgDel(bot, chat_id, notifMsgId)
-        }, 2000)
+        }, 1500)
     }
     const pending = Object.values(list).filter((val) => val != '_')
     while (true) {
@@ -276,7 +289,7 @@ const WBSnip = (bot: BotUtils, options: Optional<typeof OPT> = {}) => {
             } catch (e) {
                 bot.api.sendMessage(
                     msg.chat.id,
-                    `[LOG] weiboSnip: fetch failed\n\`${safeMDv2(
+                    `*\\[ LOG \\]* weiboSnip: fetch failed\n\`${safeMDv2(
                         e.toString()
                     )}\``,
                     {
